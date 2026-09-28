@@ -290,6 +290,34 @@ body.is-editor .visitor-only { display: none !important; }
 .cta-card h2 { font-size: clamp(1.8rem, 6vw, 2.5rem); }
 .page-tools { margin-top: 28px; text-align: center; }
 
+/* Family dates */
+.date-banner { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; margin-top: 18px; padding: 14px 16px; border-radius: var(--radius-small); background: color-mix(in srgb, var(--gold) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--line)); }
+.date-banner p { margin: 0; }
+.date-banner.is-today { border-width: 2px; }
+.date-list { list-style: none; padding: 0; margin: 0 0 16px; display: grid; gap: 10px; }
+.date-item { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 14px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-small); padding: 14px 16px; }
+.date-item .icon-btn { grid-column: 3; grid-row: 1 / span 2; }
+.date-emoji { font-size: 1.6rem; line-height: 1; }
+.date-main { min-width: 0; }
+.date-title { margin: 0; font-weight: 700; }
+.date-rule { margin: 0; color: var(--muted); font-size: .92rem; }
+.date-next { grid-column: 2; margin: 0; font-size: .92rem; display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.date-next small { color: var(--crimson); font-weight: 600; }
+@media (min-width: 720px) {
+  .date-item { grid-template-columns: auto 1fr auto auto; }
+  .date-next { grid-column: 3; grid-row: 1; flex-direction: column; align-items: flex-end; gap: 0; text-align: right; }
+  .date-item .icon-btn { grid-column: 4; grid-row: 1; }
+}
+.calendar-links { margin-bottom: 16px; }
+#s-yaad [data-open-dates] { margin-bottom: 14px; }
+.calendar-links .hint { margin-bottom: 8px; }
+.tithi-preview { margin: -6px 0 0; padding: 10px 14px; border-radius: var(--radius-small); background: var(--surface-2); font-weight: 600; }
+.tithi-preview small { display: block; font-weight: 400; }
+.pick-tithi summary { cursor: pointer; font-weight: 600; color: var(--crimson); }
+.tithi-grid { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; margin-top: 12px; }
+.pending-note { margin: 10px 0 0; font-size: .9rem; font-weight: 600; color: var(--gold); }
+.word.is-pending .word-play::before { content: "⏳"; position: absolute; top: 12px; right: 12px; font-size: 1.1rem; }
+
 /* Recorder & settings sheets */
 .sheet { width: min(100% - 16px, 620px); max-height: calc(100% - 16px); padding: 0; border: 0; border-radius: 24px; background: var(--surface); color: var(--ink); box-shadow: 0 20px 60px rgb(0 0 0 / 35%); }
 .sheet::backdrop { background: rgb(23 18 30 / 65%); backdrop-filter: blur(2px); }

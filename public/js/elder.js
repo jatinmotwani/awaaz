@@ -1,5 +1,6 @@
 import { $, $$, api, copyText, editTokenKey, formatDuration, playOnce, readJson, showError, store, toast, wireTownSelect } from './common.js';
 import { canRecord, fileDuration, micErrorMessage, startRecording, typedFile } from './recorder.js';
+import { dequeue, enqueue, pendingFor, queueAvailable } from './queue.js';
 
 const page = readJson('page-data');
 const { slug } = page;
@@ -12,7 +13,10 @@ const setToken = (token) => store.set(editTokenKey(slug), token);
 
 function setEditing(on) {
   document.body.classList.toggle('is-editor', on);
-  if (on) refreshStats();
+  if (on) {
+    refreshStats();
+    flushQueue();
+  }
 }
 
 async function refreshStats() {
@@ -31,13 +35,6 @@ function signOut(message) {
   if (message) toast(message, { error: true });
 }
 
-// A private recorder link carries the token in the #fragment, which never reaches the server logs.
-if (location.hash.startsWith('#k=')) {
-  setToken(decodeURIComponent(location.hash.slice(3)));
-  history.replaceState(null, '', location.pathname);
-  toast('Recording is unlocked on this phone.');
-}
-setEditing(Boolean(getToken()));
 
 $('#unlock-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -139,6 +136,76 @@ async function uploadClip(promptId, blob, { durationMs, source }) {
   }
 }
 
+// ---- Offline queue ---------------------------------------------------------------
+
+// No connection, or the server is restarting: worth keeping the take and retrying later.
+const isTransient = (err) => err.offline || [502, 503, 504].includes(err.status);
+
+async function keepForLater(promptId, blob, meta) {
+  if (!queueAvailable()) return false;
+  try {
+    await enqueue({ slug, promptId, blob, ...meta });
+    await renderPending();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function renderPending() {
+  if (!queueAvailable()) return;
+  let items = [];
+  try {
+    items = await pendingFor(slug);
+  } catch {
+    return;
+  }
+  $$('.pending-note').forEach((el) => el.remove());
+  $$('.is-pending').forEach((el) => el.classList.remove('is-pending'));
+  const counts = new Map();
+  for (const item of items) counts.set(item.promptId, (counts.get(item.promptId) || 0) + 1);
+  for (const [promptId, n] of counts) {
+    const card = document.getElementById(`p-${promptId}`);
+    if (!card) continue;
+    card.classList.add('is-pending');
+    if (!card.classList.contains('word')) {
+      const note = document.createElement('p');
+      note.className = 'pending-note';
+      note.textContent = `⏳ ${n} recording${n === 1 ? '' : 's'} saved on this phone — will upload when there’s signal`;
+      $('.clip-list', card).after(note);
+    }
+  }
+}
+
+let flushing = false;
+async function flushQueue() {
+  if (flushing || !queueAvailable() || !getToken()) return;
+  flushing = true;
+  let uploaded = 0;
+  try {
+    for (const item of await pendingFor(slug)) {
+      try {
+        await uploadClip(item.promptId, item.blob, { durationMs: item.durationMs, source: item.source });
+        await dequeue(item.id);
+        uploaded += 1;
+      } catch (err) {
+        if (isTransient(err) || err.status === 401) break; // try again later / after unlocking
+        await dequeue(item.id); // the server rejected this file; retrying won't help
+        toast(`A saved recording couldn’t be uploaded: ${err.message}`, { error: true, ms: 6000 });
+      }
+    }
+  } catch {
+    /* IndexedDB unavailable */
+  } finally {
+    flushing = false;
+    await renderPending();
+  }
+  if (uploaded) toast(`${uploaded} saved recording${uploaded === 1 ? '' : 's'} uploaded ✓`);
+}
+
+window.addEventListener('online', flushQueue);
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && flushQueue());
+
 // ---- Delegated clicks: record, delete, play ---------------------------------
 
 document.addEventListener('click', async (e) => {
@@ -184,12 +251,17 @@ document.addEventListener('change', async (e) => {
     return;
   }
   toast('Uploading voice note…', { ms: 60000 });
+  const durationMs = await fileDuration(file);
+  const blob = typedFile(file);
   try {
-    const durationMs = await fileDuration(file);
-    await uploadClip(promptId, typedFile(file), { durationMs, source: 'uploaded' });
+    await uploadClip(promptId, blob, { durationMs, source: 'uploaded' });
     toast('Voice note added ✓');
   } catch (err) {
-    toast(err.message, { error: true, ms: 6000 });
+    if (isTransient(err) && (await keepForLater(promptId, blob, { durationMs, source: 'uploaded' }))) {
+      toast('No signal — the voice note is saved on this phone and will upload by itself.', { ms: 6000 });
+    } else {
+      toast(err.message, { error: true, ms: 6000 });
+    }
   }
 });
 
@@ -292,6 +364,12 @@ async function saveTake() {
     }
   } catch (err) {
     if (session !== current) return;
+    const { blob, durationMs } = current.result;
+    if (isTransient(err) && (await keepForLater(current.promptId, blob, { durationMs, source: 'recorded' }))) {
+      dialog.close();
+      toast('No signal — saved on this phone. It will upload by itself when you’re back online.', { ms: 6000 });
+      return;
+    }
     const message = err.status === 401 ? 'This phone was locked (the PIN may have changed). Save the recording to your phone, unlock again, then upload it.' : err.message;
     showRecError(message, err.status === 401 ? null : saveTake, { canSaveLocal: true });
   }
@@ -374,3 +452,99 @@ $('#delete-form').addEventListener('submit', async (e) => {
     toast(err.message, { error: true });
   }
 });
+
+// ---- Family dates ------------------------------------------------------------------
+
+const datesDialog = $('#dates-dialog');
+const dateForm = $('#date-form');
+const tithiPreview = $('[data-tithi-preview]', dateForm);
+const niceDate = (ymd) =>
+  new Date(`${ymd}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+
+async function previewTithi() {
+  const date = dateForm.date.value;
+  if (dateForm.calendar.value !== 'tithi' || !date) {
+    tithiPreview.hidden = true;
+    return;
+  }
+  try {
+    const t = await api(`/api/panchang/tithi?date=${encodeURIComponent(date)}`);
+    const detail = document.createElement('small');
+    detail.textContent = [t.note, t.next ? `Next: ${niceDate(t.next)}` : ''].filter(Boolean).join(' · ');
+    tithiPreview.replaceChildren(`That day was ${t.label}.`, detail);
+    tithiPreview.hidden = false;
+  } catch {
+    tithiPreview.hidden = true;
+  }
+}
+
+function syncDateForm() {
+  $('[data-kind-other]', dateForm).hidden = dateForm.kind.value !== 'other';
+  $('[data-pick-tithi]', dateForm).hidden = dateForm.calendar.value !== 'tithi';
+  previewTithi();
+}
+
+$('[data-open-dates]')?.addEventListener('click', () => datesDialog.showModal());
+$('[data-close]', datesDialog).addEventListener('click', () => datesDialog.close());
+dateForm.addEventListener('change', (e) => {
+  if (['kind', 'calendar', 'date'].includes(e.target.name)) syncDateForm();
+});
+
+dateForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const error = $('.form-error', dateForm);
+  showError(error, '');
+  const byTithi = dateForm.calendar.value === 'tithi';
+  if (!dateForm.date.value && (!byTithi || dateForm.month.value === '')) {
+    showError(error, byTithi ? 'Enter the date it happened, or pick the tithi below.' : 'Pick the date.');
+    return;
+  }
+  try {
+    await api(`/api/elders/${slug}/dates`, {
+      method: 'POST',
+      token: getToken(),
+      body: {
+        kind: dateForm.kind.value,
+        person: dateForm.person.value,
+        label: dateForm.label.value,
+        calendar: dateForm.calendar.value,
+        date: dateForm.date.value || undefined,
+        month: dateForm.month.value,
+        paksha: dateForm.paksha.value,
+        tithi: dateForm.tithi.value,
+        year: dateForm.year.value.trim(),
+      },
+    });
+    location.hash = 's-yaad';
+    location.reload();
+  } catch (err) {
+    if (err.status === 401) signOut();
+    showError(error, err.message);
+  }
+});
+
+document.addEventListener('click', async (e) => {
+  const button = e.target.closest('[data-delete-date]');
+  if (!button) return;
+  const item = button.closest('[data-date-id]');
+  if (!window.confirm('Remove this date? Calendar reminders stop at the next refresh.')) return;
+  try {
+    await api(`/api/elders/${slug}/dates/${item.dataset.dateId}`, { method: 'DELETE', token: getToken() });
+    item.remove();
+    toast('Date removed.');
+  } catch (err) {
+    if (err.status === 401) signOut();
+    toast(err.message, { error: true });
+  }
+});
+
+// ---- Start -------------------------------------------------------------------------
+
+// A private recorder link carries the token in the #fragment, which never reaches the server logs.
+if (location.hash.startsWith('#k=')) {
+  setToken(decodeURIComponent(location.hash.slice(3)));
+  history.replaceState(null, '', location.pathname);
+  toast('Recording is unlocked on this phone.');
+}
+setEditing(Boolean(getToken()));
+renderPending();

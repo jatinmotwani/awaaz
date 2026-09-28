@@ -21,6 +21,8 @@ sponsor. Voices are never sold or licensed.
 | **Dedications** | ₹1,101 puts a line on a town page for 7 days; ₹5,100 also shows it on the Sindh map and home page. Razorpay Checkout handles payment and the line **publishes automatically**, whether the confirmation comes from the browser callback or the webhook. |
 | **Heritage sponsor** | One footer line, set with `SPONSOR_TEXT` / `SPONSOR_URL`. |
 | **Trust** | *Download all* gives a .zip of every clip with an index of what each one is. *Delete page* removes everything. The privacy page states the promises in plain words. |
+| **Family dates (Yaad)** | Barsi, birthdays and anniversaries by English date **or by tithi**. Give the date someone passed away and the app works out the tithi (it has a built-in panchang). Families subscribe to a calendar feed that reminds them every year, and on the day the page shows "Today is Dada's barsi" with a WhatsApp button — the yearly reason to come back to the voice. |
+| **Works without signal** | A recording that can't upload is kept on the phone and uploads by itself when the connection returns. |
 | **Admin** | `/admin` shows the week-one numbers (devices that opened each page, referrals), and can hide a dedication or reset a forgotten PIN. |
 
 ## Run it locally
@@ -90,6 +92,12 @@ Prompt, word and town ids are stored with recordings and in URLs. Reword freely,
 > fluent elder, and someone who reads Sindhi Devanagari, should check them. The Devanagari uses the Sindhi implosive
 > letters ॻ ॼ ॾ ॿ, which display correctly with the Noto Sans Devanagari web font the pages load from Google Fonts.
 
+## The panchang
+
+`src/lib/panchang.js` computes tithis with no external service. It uses Meeus's formulas for the Sun and Moon, amanta months named from the sidereal (Lahiri) sign at the new moon, and the tithi at sunrise in Mumbai. It skips adhik months and handles kshaya tithis. The tests check it against the textbook worked examples, published new moons, 19 festival dates from 2023–2025, and the adhik Shravan of 2023 and adhik Jyeshtha of 2026.
+
+A family abroad, or one following a local pandit's panchang, may observe a day earlier or later, and the page says so. If families ask for it, the reference city can become a setting.
+
 ## How it works
 
 - **Server:** Express 5 renders plain HTML with an escaping template tag (`src/lib/html.js`). There is no front-end build step. The browser code is a few small ES modules in `public/js`. The data layer is in `src/repo.js` and the schema in `src/migrations`.
@@ -111,6 +119,6 @@ Prompt, word and town ids are stored with recordings and in URLs. Reword freely,
 
 ## Not built yet
 
-- **v2: barsi and birthday reminders** by Gregorian date or tithi, which bring families back every year.
-- An offline queue for recordings made with no signal. Today it offers *Try again* and *Save to phone*.
-- An Arabic-script Sindhi line on prompts, for families in Pakistan and the Gulf.
+- **Push or WhatsApp reminders.** Reminders currently come through the calendar feed. Web push needs an installed PWA on iPhone, and WhatsApp needs the paid Business API.
+- **An Arabic-script Sindhi line on prompts**, for families in Pakistan and the Gulf. It needs a fluent reviewer.
+- **A per-family reference city** for tithis. Mumbai sunrise is used for everyone.

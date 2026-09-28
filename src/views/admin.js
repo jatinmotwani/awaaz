@@ -37,6 +37,7 @@ export function adminPage(ctx, { totals, pages, dedications, flash }) {
     <div class="stat"><strong>${totals.devices}</strong><span>devices opened a page</span></div>
     <div class="stat"><strong>${totals.referred}</strong><span>pages from “Record your Nani too”</span></div>
     <div class="stat"><strong>${totals.clips}</strong><span>clips · ${formatDuration(Number(totals.duration_ms))} · ${mb} MB</span></div>
+    <div class="stat"><strong>${totals.family_dates}</strong><span>family dates (barsi, birthdays)</span></div>
     <div class="stat"><strong>${formatRupees(Number(totals.dedication_paise))}</strong><span>dedications</span></div>
   </div>
 

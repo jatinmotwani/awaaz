@@ -2,6 +2,8 @@ import { html, jsonScript } from '../lib/html.js';
 import { formatDuration } from '../lib/text.js';
 import { relations, sections, prompts } from '../content/prompts.js';
 import { towns, townBySlug } from '../content/towns.js';
+import { KINDS, monthOptions } from '../lib/family-dates.js';
+import { TITHIS } from '../lib/panchang.js';
 import { icon } from './icons.js';
 import { layout, whatsappButton } from './layout.js';
 
@@ -185,7 +187,109 @@ function settingsDialog(elder) {
   </dialog>`;
 }
 
-export function elderPage(ctx, { elder, clipsByPrompt }) {
+const inDaysLabel = (n) => (n === 0 ? 'today' : n === 1 ? 'tomorrow' : `in ${n} days`);
+
+// "Today is Dada Mohan’s barsi" — the yearly reason for the family to come back to the voice.
+function dateBanner(config, elder, dates) {
+  const soon = dates.find((d) => d.inDays !== null && d.inDays <= 7);
+  if (!soon) return '';
+  const url = `${config.publicUrl}/e/${elder.slug}`;
+  if (soon.inDays === 0) {
+    const message = `${soon.emoji} Today is ${soon.title}. Let’s remember together — listen to ${elder.display_name}’s voice: ${url}`;
+    return html`<div class="date-banner is-today">
+      <p><span class="date-emoji" aria-hidden="true">${soon.emoji}</span> <strong>Today is ${soon.title}.</strong>${soon.byTithi ? ` ${soon.rule}.` : ''}</p>
+      ${whatsappButton(message, 'Share with the family')}
+    </div>`;
+  }
+  return html`<div class="date-banner">
+    <p><span class="date-emoji" aria-hidden="true">${soon.emoji}</span> <strong>${soon.title}</strong> is ${inDaysLabel(soon.inDays)} — ${soon.nextLabel}.</p>
+  </div>`;
+}
+
+function datesSection(config, elder, dates) {
+  const feed = `${config.publicUrl}/e/${elder.slug}/dates.ics`;
+  const webcal = feed.replace(/^https?:/, 'webcal:');
+  return html`<section id="s-yaad" class="container section">
+    <header class="section-head">
+      <h2>Yaad <span class="deva" lang="sd-Deva">याद</span></h2>
+      <p>Barsi, birthdays and family dates</p>
+    </header>
+    ${dates.length
+      ? html`<ul class="date-list">${dates.map(
+          (d) => html`<li class="date-item" data-date-id="${d.id}">
+            <span class="date-emoji" aria-hidden="true">${d.emoji}</span>
+            <div class="date-main">
+              <p class="date-title">${d.title}</p>
+              <p class="date-rule">${d.rule}${d.note ? html` <small>· ${d.note}</small>` : ''}</p>
+            </div>
+            <p class="date-next"><strong>${d.nextLabel}</strong>${d.inDays !== null ? html`<small>${inDaysLabel(d.inDays)}</small>` : ''}</p>
+            <button type="button" class="icon-btn editor-only" data-delete-date aria-label="Remove ${d.title}">${icon('trash', { size: 18 })}</button>
+          </li>`,
+        )}</ul>
+        <div class="calendar-links">
+          <p class="hint">Get a reminder the evening before and on the day, every year:</p>
+          <div class="row">
+            <a class="btn btn-ghost btn-small" href="${webcal}">${icon('calendar', { size: 18 })} iPhone / Mac calendar</a>
+            <a class="btn btn-ghost btn-small" href="https://calendar.google.com/calendar/render?cid=${encodeURIComponent(webcal)}" target="_blank" rel="noopener">${icon('calendar', { size: 18 })} Google Calendar</a>
+            <a class="btn btn-ghost btn-small" href="/e/${elder.slug}/dates.ics" download>${icon('download', { size: 18 })} .ics file</a>
+          </div>
+        </div>`
+      : html`<p class="muted">Add ${elder.display_name}’s birthday or a barsi, and the family gets a reminder every year —
+          with a link back to this voice.</p>`}
+    <button type="button" class="btn btn-ghost editor-only" data-open-dates>${icon('calendar', { size: 18 })} Add a date</button>
+    <p class="hint">Tithi dates use amanta months, as in most Sindhi panchangs, with the tithi at sunrise in Mumbai.
+      Your pandit or a panchang for your city may say a day earlier or later.</p>
+  </section>`;
+}
+
+function datesDialog(elder) {
+  const thisYear = new Date().getFullYear();
+  return html`<dialog id="dates-dialog" class="sheet" aria-labelledby="dates-title">
+    <div class="sheet-inner">
+      <button type="button" class="icon-btn sheet-close" data-close aria-label="Close">${icon('close')}</button>
+      <h2 id="dates-title">Add a family date</h2>
+      <form id="date-form" class="form" novalidate>
+        <fieldset class="field">
+          <legend>What is it?</legend>
+          <div class="choice-row">${Object.entries(KINDS).map(
+            ([id, k], i) => html`<label class="choice"><input type="radio" name="kind" value="${id}" ${i === 0 ? 'checked' : ''}><span>${k.emoji} ${k.label}</span></label>`,
+          )}</div>
+        </fieldset>
+        <label class="field"><span class="label">Whose?</span>
+          <input name="person" maxlength="60" value="${elder.display_name}" autocomplete="off"></label>
+        <label class="field" data-kind-other hidden><span class="label">What is the date?</span>
+          <input name="label" maxlength="60" placeholder="e.g. Wedding anniversary" autocomplete="off"></label>
+        <fieldset class="field">
+          <legend>Remembered by</legend>
+          <div class="choice-row">
+            <label class="choice"><input type="radio" name="calendar" value="tithi" checked><span>Tithi (Hindu calendar)</span></label>
+            <label class="choice"><input type="radio" name="calendar" value="gregorian"><span>English date</span></label>
+          </div>
+        </fieldset>
+        <label class="field"><span class="label">The date it happened</span>
+          <input type="date" name="date" min="1890-01-01" max="${thisYear}-12-31"></label>
+        <p class="tithi-preview" data-tithi-preview aria-live="polite" hidden></p>
+        <details class="pick-tithi" data-pick-tithi>
+          <summary>Don’t know the date? Pick the tithi instead</summary>
+          <div class="tithi-grid">
+            <label class="field"><span class="label">Month</span>
+              <select name="month"><option value="">Month…</option>${monthOptions.map((m) => html`<option value="${m.value}">${m.label}</option>`)}</select></label>
+            <label class="field"><span class="label">Paksha</span>
+              <select name="paksha"><option value="shukla">Shukla (bright half)</option><option value="krishna">Krishna (dark half)</option></select></label>
+            <label class="field"><span class="label">Tithi</span>
+              <select name="tithi">${TITHIS.map((t, i) => html`<option value="${i + 1}">${i === 14 ? 'Purnima / Amavasya' : t}</option>`)}</select></label>
+            <label class="field"><span class="label">Year <em>(optional)</em></span>
+              <input name="year" inputmode="numeric" maxlength="4" placeholder="1998"></label>
+          </div>
+        </details>
+        <p class="form-error" role="alert" hidden></p>
+        <button class="btn" type="submit">${icon('check')} Save date</button>
+      </form>
+    </div>
+  </dialog>`;
+}
+
+export function elderPage(ctx, { elder, clipsByPrompt, dates = [] }) {
   const { config } = ctx;
   const relation = relations[elder.relation];
   const town = townLabel(elder);
@@ -222,6 +326,7 @@ export function elderPage(ctx, { elder, clipsByPrompt }) {
     ${whatsappButton(shareText(config, elder))}
     <a class="btn btn-ghost" href="/e/${elder.slug}/learn">${icon('book')} Learn Sindhi with ${elder.display_name}</a>
   </div>
+  ${dateBanner(config, elder, dates)}
 </section>
 
 <section class="container editor-panel">
@@ -247,9 +352,12 @@ export function elderPage(ctx, { elder, clipsByPrompt }) {
 
 <nav class="container section-nav" aria-label="Sections">
   ${sections.map((s) => html`<a href="#s-${s.id}">${s.title}</a>`)}
+  <a href="#s-yaad">Yaad</a>
 </nav>
 
 ${sections.map((s) => sectionBlock(s, clipsByPrompt, elder))}
+
+${datesSection(config, elder, dates)}
 
 ${recordTooCta(elder)}
 
@@ -259,6 +367,7 @@ ${recordTooCta(elder)}
 
 ${recorderDialog(elder)}
 ${settingsDialog(elder)}
+${datesDialog(elder)}
 <script type="application/json" id="page-data">${jsonScript(pageData)}</script>`;
 
   return layout(ctx, {

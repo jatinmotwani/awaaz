@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { createElder, databaseAvailable, fakeOgg, signPayment, signWebhook, startApp, uploadClip } from './helpers.js';
+import { todayAt, ymdString } from '../src/lib/panchang.js';
+import { ordinal } from '../src/lib/family-dates.js';
 
 const skip = (await databaseAvailable()) ? false : 'Postgres not reachable (set TEST_DATABASE_URL)';
 
@@ -266,6 +268,78 @@ describe('Awaaz app', { skip }, () => {
       assert.equal((await del('1357')).status, 204);
       assert.equal((await app.request(`/e/${elder.slug}`)).status, 404);
       assert.equal((await app.request(clip.url)).status, 404);
+    });
+  });
+
+  describe('family dates', () => {
+    const addDate = (elder, json, token = elder.editToken) =>
+      app.request(`/api/elders/${elder.slug}/dates`, { method: 'POST', json, headers: { 'x-edit-token': token } });
+
+    it('works out a barsi tithi from the date of passing and shows it on the page', async () => {
+      const elder = await createElder(app, { displayName: 'Dadi Kamla' });
+      assert.equal((await addDate(elder, { kind: 'barsi', calendar: 'tithi', date: '2024-04-17' }, 'nope')).status, 401);
+
+      const res = await addDate(elder, { kind: 'barsi', calendar: 'tithi', date: '2024-04-17', person: 'Dada Mohan' });
+      assert.equal(res.status, 201);
+      const { date } = await res.json();
+      assert.equal(date.rule, 'Chaitra (Chet) Shukla Navami');
+      assert.match(date.title, /^Dada Mohan’s \d+(st|nd|rd|th) barsi$/);
+      assert.match(date.next, /^\d{4}-\d{2}-\d{2}$/);
+
+      const { body } = await text(`/e/${elder.slug}`);
+      assert.match(body, /id="s-yaad"/);
+      assert.match(body, /Chaitra \(Chet\) Shukla Navami/);
+      assert.match(body, new RegExp(`href="webcal://awaaz\\.test/e/${elder.slug}/dates\\.ics"`));
+      assert.match(body, /calendar\.google\.com\/calendar\/render\?cid=webcal%3A%2F%2Fawaaz\.test/);
+    });
+
+    it('serves five years of events as a calendar feed', async () => {
+      const elder = await createElder(app, { displayName: 'Nani Sita' });
+      await addDate(elder, { kind: 'birthday', calendar: 'gregorian', date: '1940-03-05' });
+      const res = await app.request(`/e/${elder.slug}/dates.ics`);
+      assert.equal(res.status, 200);
+      assert.match(res.headers.get('content-type'), /^text\/calendar/);
+      const ics = (await res.text()).replace(/\r\n /g, '');
+      assert.equal(ics.match(/BEGIN:VEVENT/g).length, 5);
+      const year = todayAt().y;
+      assert.ok(ics.includes(`DTSTART;VALUE=DATE:${year}0305`));
+      assert.ok(ics.includes(`SUMMARY:🎂 Nani Sita’s ${ordinal(year - 1940)} birthday`));
+      assert.ok(ics.includes(`URL:http://awaaz.test/e/${elder.slug}`));
+      assert.equal((await app.request('/e/nosuchpage12/dates.ics')).status, 404);
+    });
+
+    it('puts a “today is…” banner with a WhatsApp share on the day', async () => {
+      const elder = await createElder(app, { displayName: 'Dada Hiro' });
+      const today = todayAt();
+      await addDate(elder, { kind: 'birthday', calendar: 'gregorian', date: `1935-${ymdString(today).slice(5)}` });
+      const { body } = await text(`/e/${elder.slug}`);
+      assert.match(body, /class="date-banner is-today"/);
+      assert.match(body, /Today is Dada Hiro’s \d+(st|nd|rd|th) birthday/);
+      assert.match(body, /wa\.me\/\?text=[^"]*Today%20is%20Dada%20Hiro/);
+    });
+
+    it('answers “what tithi was that day?” for the form', async () => {
+      const res = await app.request('/api/panchang/tithi?date=2024-08-26');
+      const t = await res.json();
+      assert.equal(t.label, 'Shravana (Sanwan) Krishna Ashtami');
+      assert.equal(t.note, 'Bhadrapada Krishna in North Indian calendars');
+      assert.equal((await app.request('/api/panchang/tithi?date=yesterday')).status, 400);
+    });
+
+    it('removes a date, only from its own page, and caps the list', async () => {
+      const elder = await createElder(app);
+      const other = await createElder(app);
+      const { date } = await (await addDate(elder, { kind: 'anniversary', calendar: 'gregorian', date: '1960-02-14' })).json();
+      const del = (target, id) =>
+        app.request(`/api/elders/${target.slug}/dates/${id}`, { method: 'DELETE', headers: { 'x-edit-token': target.editToken } });
+      assert.equal((await del(other, date.id)).status, 404);
+      assert.equal((await del(elder, date.id)).status, 204);
+      assert.equal((await del(elder, date.id)).status, 404);
+
+      for (let i = 0; i < 12; i += 1) {
+        assert.equal((await addDate(elder, { kind: 'birthday', calendar: 'gregorian', date: '1950-01-01' })).status, 201);
+      }
+      assert.equal((await addDate(elder, { kind: 'birthday', calendar: 'gregorian', date: '1950-01-01' })).status, 409);
     });
   });
 

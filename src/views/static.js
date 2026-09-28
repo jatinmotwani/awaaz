@@ -34,6 +34,10 @@ export function privacyPage(ctx) {
   </ul>
   <p>We don’t use analytics trackers, advertising cookies or social-media pixels. Fonts load from Google Fonts. Dedication
     payments are handled by Razorpay; we never see card or UPI details.</p>
+  <p>Family dates (barsi, birthdays) are stored with the page. If you add them to Google Calendar, Google fetches the
+    page’s calendar link to keep your reminders up to date — the same link as the page, so share it just as carefully.</p>
+  <p>Recordings made without signal wait on your phone (in the browser’s storage) until they upload, then are removed
+    from the phone.</p>
 
   <h2>People who run the site</h2>
   <p>The person who runs ${config.appName} can technically access stored data to keep the service working — for example

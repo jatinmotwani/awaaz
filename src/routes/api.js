@@ -4,6 +4,8 @@ import { isId, isUuid, newClipId, newRefCode, newSlug } from '../lib/ids.js';
 import { checkEditToken, editToken, hashPin, isValidPin, lockMinutes, verifyPin } from '../lib/pin.js';
 import { sniffAudio } from '../lib/audio.js';
 import { cleanLine } from '../lib/text.js';
+import { MAX_DATES_PER_ELDER, parseFamilyDate, presentDate } from '../lib/family-dates.js';
+import { nextTithiDate, parseYmd, purnimantaNote, tithiLabel, tithiOnDate, todayAt, ymdString } from '../lib/panchang.js';
 import { rateLimit } from '../lib/rate-limit.js';
 import { isWordPrompt, promptById, relations } from '../content/prompts.js';
 import { townBySlug } from '../content/towns.js';
@@ -267,6 +269,43 @@ export function apiRouter({ config, repo, storage, transcoder }) {
       return res.status(201).json({ clip: clipJson(clip) });
     },
   );
+
+  // ---- Family dates (barsi, birthdays) ----------------------------------------
+
+  router.post('/api/elders/:slug/dates', json, requireEditor, async (req, res) => {
+    const { fields, errors } = parseFamilyDate(req.body || {}, { defaultPerson: req.elder.display_name });
+    if (errors.length) return res.status(400).json({ error: errors[0], errors });
+    if ((await repo.familyDates.countForElder(req.elder.id)) >= MAX_DATES_PER_ELDER) {
+      return res.status(409).json({ error: `A page can hold up to ${MAX_DATES_PER_ELDER} dates.` });
+    }
+    const row = await repo.familyDates.insert(req.elder.id, fields);
+    return res.status(201).json({ date: presentDate(row) });
+  });
+
+  router.delete('/api/elders/:slug/dates/:id', requireEditor, async (req, res) => {
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || !(await repo.familyDates.remove(req.elder.id, id))) {
+      return res.status(404).json({ error: 'That date is already gone.' });
+    }
+    return res.status(204).end();
+  });
+
+  // "What tithi was 3 March 1998?" — used live by the add-a-date form.
+  router.get('/api/panchang/tithi', rateLimit({ windowMs: 60 * 1000, max: 60 }), (req, res) => {
+    const date = parseYmd(req.query.date);
+    if (!date || date.y < 1890 || date.y > 2100) return res.status(400).json({ error: 'Pick a date between 1890 and 2100.' });
+    const t = tithiOnDate(date);
+    const next = nextTithiDate(t, todayAt());
+    return res.json({
+      month: t.month,
+      paksha: t.paksha,
+      tithi: t.tithi,
+      adhik: t.adhik,
+      label: tithiLabel(t),
+      note: purnimantaNote(t),
+      next: next ? ymdString(next) : null,
+    });
+  });
 
   router.delete('/api/elders/:slug/clips/:clipId', requireEditor, async (req, res) => {
     const clip = isId(req.params.clipId) ? await repo.clips.byPublicId(req.params.clipId) : null;

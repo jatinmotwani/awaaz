@@ -4,6 +4,9 @@ import { isId, randomId } from '../lib/ids.js';
 import { isBot, parseCookies } from '../lib/cookies.js';
 import { createZipWriter } from '../lib/zip.js';
 import { kebab } from '../lib/text.js';
+import { buildCalendar } from '../lib/ics.js';
+import { KINDS, describeRule, occasionTitle, occurrencesIn, presentDate } from '../lib/family-dates.js';
+import { todayAt, ymdString } from '../lib/panchang.js';
 import { promptById, promptOrder } from '../content/prompts.js';
 import { nearbyTowns, townBySlug, towns } from '../content/towns.js';
 import { elderPage, townLabel } from '../views/elder.js';
@@ -52,9 +55,13 @@ export function pagesRouter(ctx) {
       if (!clipsByPrompt.has(clip.prompt_id)) clipsByPrompt.set(clip.prompt_id, []);
       clipsByPrompt.get(clip.prompt_id).push(clip);
     }
+    const today = todayAt();
+    const dates = (await repo.familyDates.forElder(elder.id))
+      .map((row) => presentDate(row, today))
+      .sort((a, b) => (a.next || '9999').localeCompare(b.next || '9999'));
     countView(req, res, elder);
     res.set({ 'X-Robots-Tag': 'noindex', 'Cache-Control': 'no-cache' });
-    send(res, elderPage(ctx, { elder, clipsByPrompt }));
+    send(res, elderPage(ctx, { elder, clipsByPrompt, dates }));
   });
 
   router.get('/e/:slug/learn', async (req, res) => {
@@ -128,6 +135,35 @@ export function pagesRouter(ctx) {
       if (!aborted) console.error('zip download failed', err);
       res.destroy();
     }
+  });
+
+  // A calendar feed families subscribe to (or download): five years of barsi and birthdays,
+  // each linking back to the page so the day brings everyone back to the voice.
+  router.get('/e/:slug/dates.ics', async (req, res) => {
+    const elder = await findElder(req, res);
+    if (!elder) return;
+    const rows = await repo.familyDates.forElder(elder.id);
+    const pageUrl = `${config.publicUrl}/e/${elder.slug}`;
+    const host = new URL(config.publicUrl).host;
+    const { y } = todayAt();
+    const events = rows.flatMap((row) =>
+      [0, 1, 2, 3, 4].flatMap((offset) =>
+        occurrencesIn(row, y + offset).map((date) => ({
+          uid: `date-${row.id}-${ymdString(date)}@${host}`,
+          date,
+          summary: `${KINDS[row.kind].emoji} ${occasionTitle(row, date.y)}`,
+          description: `${describeRule(row)}.\nHear ${elder.display_name}’s voice and share it with the family: ${pageUrl}`,
+          url: pageUrl,
+        })),
+      ),
+    );
+    res.set({
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'Content-Disposition': `inline; filename="${kebab(elder.display_name) || 'family'}-dates.ics"`,
+      'Cache-Control': 'private, max-age=3600',
+      'X-Robots-Tag': 'noindex',
+    });
+    res.send(buildCalendar({ name: `${elder.display_name} · family dates`, events }));
   });
 
   router.get('/a/:clipId', async (req, res) => {

@@ -79,6 +79,27 @@ export function createRepo(db) {
     remove: (id) => db.query('delete from clips where id = $1', [id]),
   };
 
+  const familyDates = {
+    forElder: (elderId) => db.many('select * from family_dates where elder_id = $1 order by created_at, id', [elderId]),
+
+    async countForElder(elderId) {
+      return (await db.one('select count(*)::int as n from family_dates where elder_id = $1', [elderId])).n;
+    },
+
+    insert(elderId, f) {
+      return db.one(
+        `insert into family_dates (elder_id, kind, person, label, calendar, month, day, paksha, year)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning *`,
+        [elderId, f.kind, f.person, f.label, f.calendar, f.month, f.day, f.paksha, f.year],
+      );
+    },
+
+    async remove(elderId, id) {
+      const res = await db.query('delete from family_dates where elder_id = $1 and id = $2', [elderId, id]);
+      return res.rowCount > 0;
+    },
+  };
+
   const views = {
     record: (elderId, visitor) =>
       db.query('insert into page_views (elder_id, visitor) values ($1, $2) on conflict do nothing', [elderId, visitor]),
@@ -182,9 +203,10 @@ export function createRepo(db) {
                 (select coalesce(sum(duration_ms), 0)::bigint from clips) as duration_ms,
                 (select coalesce(sum(bytes + coalesce(original_bytes, 0)), 0)::bigint from clips) as bytes,
                 (select count(*)::int from page_views) as devices,
+                (select count(*)::int from family_dates) as family_dates,
                 (select coalesce(sum(amount_paise), 0)::bigint from dedications where status in ('paid', 'hidden')) as dedication_paise`,
       ),
   };
 
-  return { elders, clips, views, community, dedications, admin };
+  return { elders, clips, familyDates, views, community, dedications, admin };
 }
